@@ -1,127 +1,137 @@
+# app.py
 import streamlit as st
-from langchain_google_vertexai import VertexAI, VertexAIEmbeddings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.chains import RetrievalQA
-from langchain.docstore.document import Document
-from google.oauth2 import service_account
-import json
 import os
 
-# ---------------------------------------------------------------------------
-# CONFIGURACIÓN DE PÁGINA
-# ---------------------------------------------------------------------------
-st.set_page_config(
-    page_title="Asistente de Reglamentos UTN",
-    page_icon="📘",
-    layout="wide"
-)
+# --- Configuración de Autenticación para Google Cloud ---
 
-st.title("📘 Asistente de Reglamentos UTN")
+# Revisa si estamos corriendo en Streamlit Cloud (donde el secret "GCP_CREDENTIALS" existe)
+if "GCP_CREDENTIALS" in st.secrets:
+    # Si estamos desplegados, toma el JSON del secret
+    creds_json_str = st.secrets["GCP_CREDENTIALS"]
 
-# ---------------------------------------------------------------------------
-# CREDENCIALES DE GOOGLE CLOUD
-# ---------------------------------------------------------------------------
-try:
-    creds_dict = json.loads(st.secrets["GCP_CREDENTIALS"])
-    credentials = service_account.Credentials.from_service_account_info(creds_dict)
+    # Escribe el JSON en un archivo temporal (que está en .gitignore)
+    with open("gcp_key.json", "w") as f:
+        f.write(creds_json_str)
 
-    # Guardar temporalmente el archivo en /tmp
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/tmp/gcp_key.json"
-    with open(os.environ["GOOGLE_APPLICATION_CREDENTIALS"], "w") as f:
-        f.write(st.secrets["GCP_CREDENTIALS"])
+    # Setea la variable de entorno para que las bibliotecas de Google
+    # encuentren y usen este archivo de clave.
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
 
-    project_id = creds_dict["project_id"]
-except Exception as e:
-    st.error(f"Error al cargar credenciales: {e}")
-    st.stop()
+# Si no estamos en Streamlit Cloud, (estamos en local),
+# las bibliotecas usarán tu autenticación por defecto ('gcloud auth ...')
 
-# ---------------------------------------------------------------------------
-# MODELOS VERTEX AI
-# ---------------------------------------------------------------------------
-@st.cache_resource(show_spinner="Inicializando modelos Vertex AI...")
-def init_models():
-    embeddings = VertexAIEmbeddings(
-        model_name="text-multilingual-embedding-002",
-        credentials=credentials
+# Setea el proyecto (esto lo necesitamos en ambos casos)
+os.environ["GCLOUD_PROJECT"] = "rag-v0"
+
+import vertexai
+
+# Replace "your-project-id" with your actual Project ID
+vertexai.init(project="Rag-v0", location="us-central1")
+
+
+# app.py - Tu frontend con Streamlit
+import streamlit as st
+import os
+from langchain_community.document_loaders import TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_google_vertexai import VertexAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_google_vertexai import VertexAI
+from langchain.chains import RetrievalQA
+
+# Configura tu proyecto de Google Cloud
+# (Asegúrate de que esta variable de entorno esté configurada
+# o que te hayas autenticado con 'gcloud auth application-default login')
+#os.environ["GCLOUD_PROJECT"] = "rag-v0" 
+
+# --- FUNCIÓN DE CARGA Y CACHÉ ---
+# Esta función se ejecutará UNA SOLA VEZ gracias a @st.cache_resource
+# Carga los modelos y crea el RAG chain, luego lo guarda en memoria.
+@st.cache_resource
+def load_rag_chain():
+    # Creamos un placeholder para mostrar mensajes de estado en la UI
+    status_text = st.empty()
+
+    # --- 1. Cargar el Documento ---
+    status_text.info("leyendo")
+    loader = TextLoader("CSU_ORD__0__1549_OCR.txt", encoding="utf-8")
+    documents = loader.load()
+
+    # --- 2. Dividir el Texto (Chunking) ---
+    status_text.info("Dividiendo documentos en fragmentos...") 
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=100
     )
+    document_chunks = text_splitter.split_documents(documents)
+
+    # --- 3. Inicializar Modelo de Embeddings ---
+    status_text.info("Inicializando modelo de embeddings...")
+    # Asegúrate de usar el nombre que te funcionó:
+    embeddings_model = VertexAIEmbeddings(
+        model_name="text-multilingual-embedding-002" 
+    )
+
+    # --- 4. Crear Base de Datos Vectorial ---
+    status_text.info("Creando base de datos vectorial con FAISS...")
+    vector_store = FAISS.from_documents(document_chunks, embeddings_model)
+
+    # --- 5. Inicializar el LLM ---
+    status_text.info("Inicializando LLM (Gemini)...")
+    # !!! IMPORTANTE: Usa el ID del modelo que te funcionó !!!
+    # (El que encontraste en el Model Garden)
     llm = VertexAI(
-        model_name="gemini-1.5-flash",
+        model_name="gemini-2.0-flash-lite-001", # ej: "gemini-2.0-flash-lite-001"
         location="us-central1",
-        credentials=credentials,
         temperature=0.2
     )
-    return embeddings, llm
 
-embeddings, llm = init_models()
-
-# ---------------------------------------------------------------------------
-# CARGA DEL TEXTO DESDE UN ARCHIVO TXT
-# ---------------------------------------------------------------------------
-@st.cache_resource(show_spinner="Cargando texto...")
-def load_text_vectorstore(txt_path="reglamento.txt"):
-    if not os.path.exists(txt_path):
-        st.warning("⚠️ No se encontró el archivo 'reglamento.txt'. Subilo con el cargador de abajo.")
-        return None
-
-    with open(txt_path, "r", encoding="utf-8") as f:
-        text = f.read()
-
-    if not text.strip():
-        st.warning("⚠️ El archivo está vacío.")
-        return None
-
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    texts = splitter.split_text(text)
-    docs = [Document(page_content=t) for t in texts]
-
-    vectorstore = FAISS.from_documents(docs, embeddings)
-    return vectorstore
-
-# ---------------------------------------------------------------------------
-# INTERFAZ DE USUARIO PARA CARGAR EL TXT
-# ---------------------------------------------------------------------------
-uploaded_file = st.file_uploader("📄 Subí el archivo de texto (formato .txt)", type=["txt"])
-
-if uploaded_file is not None:
-    temp_path = "/tmp/reglamento.txt"
-    with open(temp_path, "wb") as f:
-        f.write(uploaded_file.getvalue())
-    st.success("✅ Archivo cargado correctamente.")
-    vectorstore = load_text_vectorstore(temp_path)
-else:
-    vectorstore = load_text_vectorstore("reglamento.txt")
-
-if not vectorstore:
-    st.stop()
-
-# ---------------------------------------------------------------------------
-# CADENA RAG (Retrieval-Augmented Generation)
-# ---------------------------------------------------------------------------
-@st.cache_resource(show_spinner="Creando cadena de consulta...")
-def init_chain(vectorstore):
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-    qa_chain = RetrievalQA.from_chain_type(
+    # --- 6. Crear la Cadena RAG ---
+    status_text.info("Creando la cadena RAG...")
+    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    
+    rag_chain = RetrievalQA.from_chain_type(
         llm=llm,
-        retriever=retriever,
         chain_type="stuff",
-        verbose=False
+        retriever=retriever,
+        return_source_documents=True
     )
-    return qa_chain
+    
+    status_text.success("¡Aplicación lista! Ya puedes hacer tu pregunta.")
+    return rag_chain
 
-rag_chain = init_chain(vectorstore)
+# --- INTERFAZ DE USUARIO PRINCIPAL ---
 
-# ---------------------------------------------------------------------------
-# INTERFAZ DE CONSULTA
-# ---------------------------------------------------------------------------
-st.write("💬 Ingresá tu pregunta sobre el reglamento cargado:")
+st.title("🤖 Chatbot de Reglamentos")
+st.caption("Haz una pregunta sobre el reglamento de la UTN (CSU_ORD__0__1549_OCR.txt)")
 
-query = st.text_input("Pregunta:")
+try:
+    # Carga la cadena RAG (usará la caché si ya está cargada)
+    rag_chain = load_rag_chain()
+    
+    # --- 7. Caja de texto para la pregunta ---
+    query = st.text_input("Escribe tu pregunta:", placeholder="Ej: ¿Cuántos días de vacaciones tengo por año?")
 
-if query:
-    with st.spinner("Analizando el texto..."):
-        try:
+    # Si el usuario escribió una pregunta (y presionó Enter)
+    if query:
+        # Muestra un indicador de "pensando..."
+        with st.spinner("Buscando en el reglamento y generando respuesta..."):
+            
+            # --- 8. Ejecutar la Cadena RAG ---
             result = rag_chain.invoke(query)
-            st.success(result["result"])
-        except Exception as e:
-            st.error(f"Error al generar respuesta: {e}")
+            
+            # --- 9. Mostrar Resultados ---
+            st.success("**Respuesta:**")
+            st.write(result['result'])
+            
+            # --- 10. Mostrar Fuentes (opcional pero recomendado) ---
+            with st.expander("Ver las fuentes utilizadas"):
+                st.write("Fragmentos del documento que usó el LLM para responder:")
+                for doc in result["source_documents"]:
+                    st.markdown(f"**Fuente:** `{doc.metadata.get('source', 'N/A')}`")
+                    st.info(doc.page_content)
+
+except Exception as e:
+    st.error(f"Ha ocurrido un error al inicializar la aplicación:")
+    st.error(e)
+    st.warning("Verifica que el `model_name` del LLM en el script `app.py` sea el ID de modelo correcto que encontraste en el Model Garden.")
