@@ -22,6 +22,13 @@ if "GCP_CREDENTIALS" in st.secrets:
 
 # Setea el proyecto (esto lo necesitamos en ambos casos)
 os.environ["GCLOUD_PROJECT"] = "rag-v0"
+
+import vertexai
+
+# Replace "your-project-id" with your actual Project ID
+vertexai.init(project="Rag-v0", location="us-central1")
+
+
 # app.py - Tu frontend con Streamlit
 import streamlit as st
 import os
@@ -35,7 +42,7 @@ from langchain.chains import RetrievalQA
 # Configura tu proyecto de Google Cloud
 # (Asegúrate de que esta variable de entorno esté configurada
 # o que te hayas autenticado con 'gcloud auth application-default login')
-os.environ["GCLOUD_PROJECT"] = "rag-v0" 
+#os.environ["GCLOUD_PROJECT"] = "rag-v0" 
 
 # --- FUNCIÓN DE CARGA Y CACHÉ ---
 # Esta función se ejecutará UNA SOLA VEZ gracias a @st.cache_resource
