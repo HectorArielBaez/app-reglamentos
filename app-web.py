@@ -1,3 +1,27 @@
+# app.py
+import streamlit as st
+import os
+
+# --- Configuración de Autenticación para Google Cloud ---
+
+# Revisa si estamos corriendo en Streamlit Cloud (donde el secret "GCP_CREDENTIALS" existe)
+if "GCP_CREDENTIALS" in st.secrets:
+    # Si estamos desplegados, toma el JSON del secret
+    creds_json_str = st.secrets["GCP_CREDENTIALS"]
+
+    # Escribe el JSON en un archivo temporal (que está en .gitignore)
+    with open("gcp_key.json", "w") as f:
+        f.write(creds_json_str)
+
+    # Setea la variable de entorno para que las bibliotecas de Google
+    # encuentren y usen este archivo de clave.
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_key.json"
+
+# Si no estamos en Streamlit Cloud, (estamos en local),
+# las bibliotecas usarán tu autenticación por defecto ('gcloud auth ...')
+
+# Setea el proyecto (esto lo necesitamos en ambos casos)
+os.environ["GCLOUD_PROJECT"] = "rag-v0
 # app.py - Tu frontend con Streamlit
 import streamlit as st
 import os
@@ -23,7 +47,7 @@ def load_rag_chain():
 
     # --- 1. Cargar el Documento ---
     status_text.info("leyendo")
-    loader = TextLoader("/home/ariel/Documentos/proyectos/llms-reglamento/CSU_ORD__0__1549_OCR.txt", encoding="utf-8")
+    loader = TextLoader("CSU_ORD__0__1549_OCR.txt", encoding="utf-8")
     documents = loader.load()
 
     # --- 2. Dividir el Texto (Chunking) ---
