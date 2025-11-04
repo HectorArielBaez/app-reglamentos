@@ -21,7 +21,7 @@ if "GCP_CREDENTIALS" in st.secrets:
 # las bibliotecas usarán tu autenticación por defecto ('gcloud auth ...')
 
 # Setea el proyecto (esto lo necesitamos en ambos casos)
-os.environ["GCLOUD_PROJECT"] = "rag-v0
+os.environ["GCLOUD_PROJECT"] = "rag-v0"
 # app.py - Tu frontend con Streamlit
 import streamlit as st
 import os
